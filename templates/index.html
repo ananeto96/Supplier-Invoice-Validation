@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shipment cost{% if invoice and invoice.invoice_number %} · {{ invoice.invoice_number }}{% endif %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,560;8..60,650&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <header class="top">
+    <div class="top-inner">
+      <p class="brand">Supplier invoice</p>
+      <h1>Shipment cost</h1>
+      <p class="lede">Upload an Alcotrans invoice. Each shipment reference is summed, and the VAT line is left out of the cost.</p>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel upload-panel">
+      <form class="drop" action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
+        <label class="file-label" for="invoice">Alcotrans invoice PDF</label>
+        <div class="file-row">
+          <input id="invoice" name="invoice" type="file" accept="application/pdf,.pdf" required>
+          <button class="button" type="submit">Read invoice</button>
+        </div>
+        <p class="hint">The workbook uses the same columns as the APS template: CodSE, CartaPorte, Preco, TaxaIva, Data.</p>
+      </form>
+      {% if sample_ready %}
+      <form class="sample-form" action="{{ url_for('sample') }}" method="post">
+        <button class="text-button" type="submit">Try the sample invoice 202618638</button>
+      </form>
+      {% endif %}
+      {% if error %}
+      <p class="error" role="alert">{{ error }}</p>
+      {% endif %}
+    </section>
+
+    {% if invoice %}
+    <section class="result" aria-live="polite">
+      <div class="result-head">
+        <div>
+          <p class="eyebrow">{{ invoice.supplier or "Supplier" }}{% if invoice.invoice_number %} · Invoice {{ invoice.invoice_number }}{% endif %}</p>
+          <h2>{{ invoice.customer or "Shipment costs" }}</h2>
+          <p class="meta">
+            {{ invoice.document_date | longdate }}
+            {% if invoice.period %} · Services {{ invoice.period }}{% endif %}
+          </p>
+        </div>
+        <a class="button" href="{{ url_for('download', token=token) }}">Download Excel</a>
+      </div>
+
+      <div class="stats">
+        <article>
+          <p class="stat-label">References</p>
+          <p class="stat-value">{{ invoice.shipments | length }}</p>
+        </article>
+        <article>
+          <p class="stat-label">Net cost</p>
+          <p class="stat-value">{{ invoice.net_cost | eur }}</p>
+        </article>
+        <article class="vat-stat">
+          <p class="stat-label">VAT removed</p>
+          <p class="stat-value">{{ invoice.vat_amount | eur }}</p>
+        </article>
+      </div>
+
+      <div class="note {% if invoice.reconciles %}ok{% else %}warn{% endif %}">
+        {% if invoice.reconciles %}
+        <p>The sum of every reference is <strong>{{ invoice.net_cost | eur }}</strong>, the same as the invoice subtotal. The line <strong>{{ invoice.vat_line or "I.V.A." }}</strong> is the 23% VAT and is not added to any reference.</p>
+        {% else %}
+        <p>The references sum to <strong>{{ invoice.net_cost | eur }}</strong>. The printed subtotal is <strong>{{ invoice.subtotal | eur }}</strong>. Check the invoice before using this file.</p>
+        {% endif %}
+        {% if invoice.total_with_vat %}
+        <p class="note-second">Invoice total with VAT: {{ invoice.total_with_vat | eur }}.</p>
+        {% endif %}
+        {% if invoice.vat_rows %}
+        <ul class="vat-rows">
+          {% for row in invoice.vat_rows %}
+          <li>{{ row.rate }}% on {{ row.base | eur }} → VAT {{ row.vat | eur }}{% if row.vat == 0 %} (exempt, kept in the cost){% else %} (removed){% endif %}</li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </div>
+
+      <div class="ledger-tools">
+        <label for="filter">Find a reference</label>
+        <input id="filter" type="search" placeholder="ES509856LR" autocomplete="off">
+        <p class="hint">CodSE and CartaPorte are the reference. Preco is this net cost. TaxaIva is 0. Data is the invoice date, {{ invoice.document_date or "not printed" }}.</p>
+      </div>
+
+      <div class="ledger" id="ledger">
+        <div class="ledger-head">
+          <span>Reference</span>
+          <span>Process</span>
+          <span>Route</span>
+          <span>Lines</span>
+          <span>Net cost</span>
+        </div>
+        {% for shipment in invoice.shipments %}
+        <details class="shipment" data-ref="{{ shipment.reference }}">
+          <summary>
+            <span class="ref">{{ shipment.reference }}</span>
+            <span>{{ shipment.process }}</span>
+            <span>{{ shipment.route }}</span>
+            <span>{{ shipment.charges | length }}</span>
+            <span class="num">{{ shipment.net_cost | eur }}</span>
+          </summary>
+          <div class="charges">
+            {% for line in shipment.charges %}
+            <div class="charge">
+              <span>{{ line.label }}</span>
+              <span class="rate {% if line.rate %}taxed{% else %}exempt{% endif %}">{{ line.rate_label }}</span>
+              <span class="num">{{ line.amount | eur }}</span>
+            </div>
+            {% endfor %}
+            <div class="charge total">
+              <span>Cost without VAT</span>
+              <span></span>
+              <span class="num">{{ shipment.net_cost | eur }}</span>
+            </div>
+          </div>
+        </details>
+        {% endfor %}
+      </div>
+      <p class="empty-filter" id="empty-filter" hidden>No reference matches.</p>
+    </section>
+    {% endif %}
+  </main>
+
+  <script>
+    const filter = document.getElementById("filter");
+    const empty = document.getElementById("empty-filter");
+    if (filter) {
+      filter.addEventListener("input", () => {
+        const query = filter.value.trim().toLowerCase();
+        let shown = 0;
+        document.querySelectorAll(".shipment").forEach((row) => {
+          const match = !query || row.dataset.ref.toLowerCase().includes(query);
+          row.hidden = !match;
+          if (!match) row.open = false;
+          if (match) shown += 1;
+        });
+        empty.hidden = shown !== 0;
+      });
+    }
+  </script>
+</body>
+</html>
